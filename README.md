@@ -82,30 +82,6 @@ Espera a que termine la transferencia y vuelva a aparecer el indicador de comand
 
 El altavoz 3W se conecta al amplificador MAX98357A conectando el cable negro al conector "-" y el cable rojo al conector "+".
 
+**<ins>[FLASHEAR EL ESP32-S3]</ins>**
 
-
-It is inspired by [this video from Domotica per Tutti](https://www.youtube.com/watch?v=EEh26tGFiz4)
-
-**<ins>[REQUIRED MATERIALS]</ins>**
-
-1.- ESP32-C6
-
-2.- R503 Fingerprint reader
-
-**<ins>[WIRING DIAGRAM]</ins>**
-
-![WIRING DIAGRAM](docs/ESQUEMA-FINGERPRINT.jpg)
-
-The ESP32-C6 must be flashed with [this YAML](fingerprint-thread.yaml) in ESPHome. The program is prepared for the ESP32 to connect to a Thread network.
-
-**<ins>[HOW TO USE THE FINGERPRINT]</ins>**
-
-In Home Assistant go to: Developer tools >>> Actions
-
-To add fingerprints: esphome.tagreader_fingerprint_thread_enroll
-
-To cancel adding fingerprints process: esphome.tagreader_fingerprint_thread_cancel_enroll
-
-To delete a single fingerprint: esphome.tagreader_fingerprint_thread_delete
-
-To delete all fingerprints: esphome.tagreader_fingerprint_thread_delete_all
+Se conecta el ESP32 de la placa XVF3800 al PC y se flashea como cualquier otro ESP32 con ESPhome en Home Assistant. Se utiliza [este código YAML](respeaker-xvf3800.yaml)
