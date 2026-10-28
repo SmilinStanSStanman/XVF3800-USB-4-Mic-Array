@@ -14,6 +14,7 @@ Descarga [el firmware del ReSpeaker XVF3800](reSpeaker-XVF3800-firmware/reSpeake
 Dentro del ZIP, el firmware se encuentra en:
 
 xmos_firmwares
+
 └── i2s
 
 El directorio oficial separa las variantes I²S master de 48 kHz e I²S slave de 16 kHz. Hay que utilizar la I²S master de 48 kHz. Tiene un nombre del tipo "respeaker_xvf3800_i2s_master_v1.0.9_48k.bin".
