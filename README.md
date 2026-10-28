@@ -80,7 +80,7 @@ Espera a que termine la transferencia y vuelva a aparecer el indicador de comand
 
 ![WIRING DIAGRAM](docs/cableado.png)
 
-
+El altavoz 3W se conecta al amplificador MAX98357A conectando el cable negro al conector "-" y el cable rojo al conector "+".
 
 
 
