@@ -1,0 +1,114 @@
+esphome:
+  name: respeaker-xvf3800
+  friendly_name: reSpeaker XVF3800
+  min_version: 2026.10.1
+  name_add_mac_suffix: false
+
+esp32:
+  board: seeed_xiao_esp32s3
+  framework:
+    type: esp-idf
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+
+api:
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+# El XVF3800 genera los relojes.
+# Los dos periféricos I2S del ESP32 comparten esas señales.
+i2s_audio:
+  - id: i2s_input
+    i2s_lrclk_pin:
+      number: GPIO7
+      allow_other_uses: true
+    i2s_bclk_pin:
+      number: GPIO8
+      allow_other_uses: true
+
+  - id: i2s_output
+    i2s_lrclk_pin:
+      number: GPIO7
+      allow_other_uses: true
+    i2s_bclk_pin:
+      number: GPIO8
+      allow_other_uses: true
+
+microphone:
+  # Entrada física desde el XVF3800.
+  - platform: i2s_audio
+    id: respeaker_mic_raw
+    i2s_audio_id: i2s_input
+    adc_type: external
+    i2s_din_pin: GPIO43
+    pdm: false
+    channel: stereo
+    sample_rate: 48000
+    bits_per_sample: 32bit
+    i2s_mode: secondary
+    correct_dc_offset: true
+
+  # Conversión al formato utilizado por el asistente:
+  # 16 kHz, mono y 16 bits.
+  # El canal 1 corresponde al derecho.
+  - platform: resampler
+    id: respeaker_mic
+    microphone:
+      microphone: respeaker_mic_raw
+      channels: 1
+      bits_per_sample: 16
+    sample_rate: 16000
+
+speaker:
+  # Salida digital hacia el amplificador MAX98357A.
+  # No se configura el DAC AIC3104 integrado del ReSpeaker.
+  - platform: i2s_audio
+    id: respeaker_speaker
+    i2s_audio_id: i2s_output
+    dac_type: external
+    i2s_dout_pin: GPIO44
+    channel: stereo
+    sample_rate: 48000
+    bits_per_sample: 32bit
+    i2s_mode: secondary
+    buffer_duration: 500ms
+    timeout: never
+
+media_player:
+  - platform: speaker
+    name: "Media Player"
+    id: respeaker_media_player
+    announcement_pipeline:
+      speaker: respeaker_speaker
+      sample_rate: 48000
+      num_channels: 2
+
+voice_assistant:
+  id: respeaker_va
+  microphone: respeaker_mic
+  media_player: respeaker_media_player
+  use_wake_word: false
+
+button:
+  - platform: restart
+    name: "Restart"
+
+switch:
+  - platform: template
+    name: "Start Voice Assistant"
+    id: start_voice_assistant
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+    turn_on_action:
+      - voice_assistant.start:
+    turn_off_action:
+      - voice_assistant.stop:
