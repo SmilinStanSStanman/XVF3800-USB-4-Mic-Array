@@ -72,9 +72,13 @@ dfu-util.exe -R -e -a 1 -D "C:\XVF3800\firmware.bin"
 
 Espera a que termine la transferencia y vuelva a aparecer el indicador de comandos. En ese momento, desconecta el USB del puerto XMOS. El flasheo está completado.
 
+**<ins>[CABLEADO]</ins>**
 
+![WIRING DIAGRAM](docs/ESP32-S3-PINS-RESPEAKER.png)
 
+![WIRING DIAGRAM](docs/max98357a.png)
 
+![WIRING DIAGRAM](docs/cableado.png)
 
 
 
