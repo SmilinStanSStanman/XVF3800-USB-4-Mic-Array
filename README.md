@@ -6,7 +6,7 @@ Seeed Studio XVF3800-USB-4-Mic-Array
 Amplificador MAX98357A
 Altavoz 3W
 
-ACTUALIZACION DE FIRMWARE DE XVF3800
+**<ins>[ACTUALIZACION DE FIRMWARE DE XVF3800]</ins>**
 
 Descarga [el firmware del ReSpeaker XVF3800](reSpeaker-XVF3800-firmware/reSpeaker_XVF3800_USB_4MIC_ARRAY-master.zip).
 Dentro del ZIP, el firmware se encuentra en:
