@@ -16,16 +16,19 @@ psram:
 logger:
 
 api:
+  encryption:
+    key: !secret api_encryption_key
 
 ota:
   - platform: esphome
+    encryption:
 
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
 
-# El XVF3800 genera los relojes.
-# Los dos periféricos I2S del ESP32 comparten esas señales.
+# El XVF3800 genera los relojes I2S.
+# Ambos periféricos del ESP32 comparten BCLK y LRCLK.
 i2s_audio:
   - id: i2s_input
     i2s_lrclk_pin:
@@ -57,9 +60,8 @@ microphone:
     i2s_mode: secondary
     correct_dc_offset: true
 
-  # Conversión al formato utilizado por el asistente:
-  # 16 kHz, mono y 16 bits.
-  # El canal 1 corresponde al derecho.
+  # Entrada para Assist y microWakeWord:
+  # canal derecho, 16 bits y 16 kHz.
   - platform: resampler
     id: respeaker_mic
     microphone:
@@ -69,8 +71,7 @@ microphone:
     sample_rate: 16000
 
 speaker:
-  # Salida digital hacia el amplificador MAX98357A.
-  # No se configura el DAC AIC3104 integrado del ReSpeaker.
+  # Salida física al MAX98357A.
   - platform: i2s_audio
     id: respeaker_speaker
     i2s_audio_id: i2s_output
@@ -83,32 +84,166 @@ speaker:
     buffer_duration: 500ms
     timeout: never
 
+  # Mezcla música y anuncios sobre la misma salida física.
+  - platform: mixer
+    id: respeaker_mixer
+    output_speaker: respeaker_speaker
+    num_channels: 2
+    source_speakers:
+      - id: announcement_mixer_input
+      - id: media_mixer_input
+
+  # Adapta la frecuencia de los anuncios a la salida.
+  - platform: resampler
+    id: announcement_speaker
+    output_speaker: announcement_mixer_input
+    sample_rate: 48000
+
+  # Adapta la frecuencia de la música a la salida.
+  - platform: resampler
+    id: media_speaker
+    output_speaker: media_mixer_input
+    sample_rate: 48000
+
 media_player:
   - platform: speaker
     name: "Media Player"
     id: respeaker_media_player
+
+    # Tamaño del búfer de cada ruta, en bytes.
+    buffer_size: 1000000
+
     announcement_pipeline:
-      speaker: respeaker_speaker
+      speaker: announcement_speaker
+      format: FLAC
       sample_rate: 48000
       num_channels: 2
+
+    media_pipeline:
+      speaker: media_speaker
+      format: FLAC
+      sample_rate: 48000
+      num_channels: 2
+
+    # Conserva el ducking de tu configuración actual.
+    on_state:
+      - if:
+          condition:
+            media_player.is_announcing:
+              id: respeaker_media_player
+          then:
+            # Reduce solo la música durante anuncios y TTS.
+            - mixer_speaker.apply_ducking:
+                id: media_mixer_input
+                decibel_reduction: 12
+                duration: 0s
+          else:
+            # Recupera el nivel normal durante un segundo.
+            - mixer_speaker.apply_ducking:
+                id: media_mixer_input
+                decibel_reduction: 0
+                duration: 1s
+
+# Detección local de "Okay Nabu".
+micro_wake_word:
+  id: respeaker_wake_word
+
+  microphone:
+    microphone: respeaker_mic
+
+  stop_after_detection: true
+
+  models:
+    - model: okay_nabu
+      id: okay_nabu_model
+
+  on_wake_word_detected:
+    - logger.log:
+        format: "Palabra de activación detectada: %s"
+        args: ["wake_word.c_str()"]
+
+    - voice_assistant.start:
+        wake_word: !lambda return wake_word;
+
+# Reactiva la detección al terminar una petición.
+script:
+  - id: rearmar_palabra_activacion
+    mode: restart
+    then:
+      - wait_until:
+          condition:
+            and:
+              - not:
+                  voice_assistant.is_running:
+              - not:
+                  media_player.is_announcing:
+                    id: respeaker_media_player
+
+      - delay: 500ms
+
+      - if:
+          condition:
+            and:
+              - voice_assistant.connected:
+              - not:
+                  micro_wake_word.is_running:
+          then:
+            - micro_wake_word.start:
 
 voice_assistant:
   id: respeaker_va
   microphone: respeaker_mic
   media_player: respeaker_media_player
+  micro_wake_word: respeaker_wake_word
+
+  # La detección de la palabra se hace localmente.
   use_wake_word: false
+
+  on_client_connected:
+    - script.execute: rearmar_palabra_activacion
+
+  on_client_disconnected:
+    - script.stop: rearmar_palabra_activacion
+    - micro_wake_word.stop:
+
+  on_start:
+    - micro_wake_word.stop:
+
+  on_stt_end:
+    - logger.log:
+        format: "Assist ha reconocido: %s"
+        args: ["x.c_str()"]
+
+  on_end:
+    - script.execute: rearmar_palabra_activacion
+
+  on_error:
+    - logger.log:
+        level: ERROR
+        format: "Error de Assist: %s - %s"
+        args: ["code.c_str()", "message.c_str()"]
+
+    - script.execute: rearmar_palabra_activacion
 
 button:
   - platform: restart
     name: "Restart"
 
+# Se conserva la activación manual para pruebas.
+# No es un interruptor de privacidad:
+# apagarlo no deshabilita "Okay Nabu".
 switch:
   - platform: template
     name: "Start Voice Assistant"
     id: start_voice_assistant
     optimistic: true
     restore_mode: ALWAYS_OFF
+
     turn_on_action:
+      - script.stop: rearmar_palabra_activacion
+      - micro_wake_word.stop:
       - voice_assistant.start:
+
     turn_off_action:
       - voice_assistant.stop:
+      - script.execute: rearmar_palabra_activacion
