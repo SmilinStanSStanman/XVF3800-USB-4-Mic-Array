@@ -27,8 +27,15 @@ wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
 
+# Control del XVF3800 y del aro de LED.
+i2c:
+  id: xmos_control_bus
+  sda: GPIO5
+  scl: GPIO6
+  frequency: 100kHz
+  scan: true
+
 # El XVF3800 genera los relojes I2S.
-# Ambos periféricos del ESP32 comparten BCLK y LRCLK.
 i2s_audio:
   - id: i2s_input
     i2s_lrclk_pin:
@@ -47,7 +54,6 @@ i2s_audio:
       allow_other_uses: true
 
 microphone:
-  # Entrada física desde el XVF3800.
   - platform: i2s_audio
     id: respeaker_mic_raw
     i2s_audio_id: i2s_input
@@ -60,18 +66,16 @@ microphone:
     i2s_mode: secondary
     correct_dc_offset: true
 
-  # Entrada para Assist y microWakeWord:
-  # canal derecho, 16 bits y 16 kHz.
+  # Canal derecho, 16 bits y 16 kHz.
   - platform: resampler
     id: respeaker_mic
     microphone:
       microphone: respeaker_mic_raw
-      channels: 1
-      bits_per_sample: 16
+    num_channels: 1
+    bits_per_sample: 16
     sample_rate: 16000
 
 speaker:
-  # Salida física al MAX98357A.
   - platform: i2s_audio
     id: respeaker_speaker
     i2s_audio_id: i2s_output
@@ -84,7 +88,6 @@ speaker:
     buffer_duration: 500ms
     timeout: never
 
-  # Mezcla música y anuncios sobre la misma salida física.
   - platform: mixer
     id: respeaker_mixer
     output_speaker: respeaker_speaker
@@ -93,13 +96,11 @@ speaker:
       - id: announcement_mixer_input
       - id: media_mixer_input
 
-  # Adapta la frecuencia de los anuncios a la salida.
   - platform: resampler
     id: announcement_speaker
     output_speaker: announcement_mixer_input
     sample_rate: 48000
 
-  # Adapta la frecuencia de la música a la salida.
   - platform: resampler
     id: media_speaker
     output_speaker: media_mixer_input
@@ -109,8 +110,6 @@ media_player:
   - platform: speaker
     name: "Media Player"
     id: respeaker_media_player
-
-    # Tamaño del búfer de cada ruta, en bytes.
     buffer_size: 1000000
 
     announcement_pipeline:
@@ -125,26 +124,40 @@ media_player:
       sample_rate: 48000
       num_channels: 2
 
-    # Conserva el ducking de tu configuración actual.
+    # Conserva el archivo junto al YAML.
+    files:
+      - id: sonido_ok_nabu
+        file: ok_nabu.flac
+
+    # Atenúa únicamente la música durante los anuncios.
     on_state:
       - if:
           condition:
             media_player.is_announcing:
               id: respeaker_media_player
           then:
-            # Reduce solo la música durante anuncios y TTS.
             - mixer_speaker.apply_ducking:
                 id: media_mixer_input
                 decibel_reduction: 12
                 duration: 0s
           else:
-            # Recupera el nivel normal durante un segundo.
             - mixer_speaker.apply_ducking:
                 id: media_mixer_input
                 decibel_reduction: 0
                 duration: 1s
 
-# Detección local de "Okay Nabu".
+globals:
+  # 0: reposo, 1: aviso, 2: escucha, 3: procesando, 4: respuesta.
+  - id: fase_visual
+    type: int
+    restore_value: false
+    initial_value: '0'
+
+  - id: posicion_animacion
+    type: int
+    restore_value: false
+    initial_value: '0'
+
 micro_wake_word:
   id: respeaker_wake_word
 
@@ -162,11 +175,225 @@ micro_wake_word:
         format: "Palabra de activación detectada: %s"
         args: ["wake_word.c_str()"]
 
-    - voice_assistant.start:
-        wake_word: !lambda return wake_word;
+    - script.execute:
+        id: iniciar_interaccion
+        palabra: !lambda return wake_word;
 
-# Reactiva la detección al terminar una petición.
 script:
+  # Configuración común del aro.
+  # Color RGB: #0078FF.
+  # El uint32 se transmite en orden little-endian.
+  - id: configurar_aro
+    mode: restart
+    parameters:
+      efecto: int
+      brillo: int
+    then:
+      - lambda: |-
+          auto enviar = [](const uint8_t *datos, size_t longitud) {
+            auto resultado = id(xmos_control_bus).write(
+              0x2C, datos, longitud
+            );
+
+            if (resultado != esphome::i2c::ERROR_OK) {
+              ESP_LOGE(
+                "xmos_led",
+                "Error I2C: %d",
+                static_cast<int>(resultado)
+              );
+              return false;
+            }
+
+            return true;
+          };
+
+          const uint8_t nivel[] = {
+            0x14, 0x0D, 0x01,
+            static_cast<uint8_t>(brillo)
+          };
+
+          // Color RGB #0078FF.
+          const uint8_t azul[] = {
+            0x14, 0x10, 0x04,
+            0xFF, 0x78, 0x00, 0x00
+          };
+
+          // Fondo apagado y sector direccional azul.
+          const uint8_t direccion[] = {
+            0x14, 0x11, 0x08,
+            0x00, 0x00, 0x00, 0x00,
+            0xFF, 0x78, 0x00, 0x00
+          };
+
+          const uint8_t modo[] = {
+            0x14, 0x0C, 0x01,
+            static_cast<uint8_t>(efecto)
+          };
+
+          if (!enviar(nivel, sizeof(nivel))) return;
+          if (!enviar(azul, sizeof(azul))) return;
+          if (!enviar(direccion, sizeof(direccion))) return;
+          if (!enviar(modo, sizeof(modo))) return;
+
+  # Dibuja un punto azul con una estela de dos LED.
+  - id: dibujar_punto_aro
+    mode: restart
+    parameters:
+      posicion: int
+    then:
+      - lambda: |-
+          uint8_t trama[51] = {};
+          trama[0] = 0x14;
+          trama[1] = 0x13;
+          trama[2] = 48;
+
+          const int cabeza = ((posicion % 12) + 12) % 12;
+
+          for (int led = 0; led < 12; led++) {
+            const int distancia = (cabeza - led + 12) % 12;
+
+            uint8_t intensidad = 0;
+
+            if (distancia == 0) {
+              intensidad = 255;
+            } else if (distancia == 1) {
+              intensidad = 80;
+            } else if (distancia == 2) {
+              intensidad = 20;
+            }
+
+            // Escala el color #0078FF según la estela.
+            const uint8_t rojo = 0;
+            const uint8_t verde =
+              static_cast<uint8_t>((120 * intensidad) / 255);
+            const uint8_t azul = intensidad;
+
+            const int indice = 3 + led * 4;
+
+            // uint32 RGB en little-endian: B, G, R, 0.
+            trama[indice] = azul;
+            trama[indice + 1] = verde;
+            trama[indice + 2] = rojo;
+            trama[indice + 3] = 0;
+          }
+
+          auto resultado = id(xmos_control_bus).write(
+            0x2C, trama, sizeof(trama)
+          );
+
+          if (resultado != esphome::i2c::ERROR_OK) {
+            ESP_LOGW(
+              "xmos_led",
+              "Error al actualizar animacion: %d",
+              static_cast<int>(resultado)
+            );
+          }
+
+  # Una vuelta rápida durante el tono de activación.
+  - id: barrido_activacion
+    mode: restart
+    then:
+      - lambda: id(posicion_animacion) = 0;
+
+      - script.execute:
+          id: configurar_aro
+          efecto: 5
+          brillo: 64
+
+      - repeat:
+          count: 12
+          then:
+            - if:
+                condition:
+                  lambda: return id(fase_visual) == 1;
+                then:
+                  - script.execute:
+                      id: dibujar_punto_aro
+                      posicion: !lambda return id(posicion_animacion);
+
+            - lambda: |-
+                id(posicion_animacion) =
+                  (id(posicion_animacion) + 1) % 12;
+
+            - delay: 20ms
+
+  # Giro continuo durante la respuesta de Assist.
+  - id: giro_respuesta
+    mode: restart
+    then:
+      - lambda: id(posicion_animacion) = 0;
+
+      - script.execute:
+          id: configurar_aro
+          efecto: 5
+          brillo: 64
+
+      - while:
+          condition:
+            lambda: return id(fase_visual) == 4;
+          then:
+            - script.execute:
+                id: dibujar_punto_aro
+                posicion: !lambda return id(posicion_animacion);
+
+            - lambda: |-
+                id(posicion_animacion) =
+                  (id(posicion_animacion) + 1) % 12;
+
+            - delay: 70ms
+
+  # Tono, barrido y comienzo de una petición.
+  - id: iniciar_interaccion
+    mode: single
+    parameters:
+      palabra: string
+    then:
+      - script.stop: rearmar_palabra_activacion
+      - script.stop: giro_respuesta
+      - micro_wake_word.stop:
+
+      - lambda: id(fase_visual) = 1;
+
+      - script.execute: barrido_activacion
+
+      - media_player.speaker.play_on_device_media_file:
+          media_file: sonido_ok_nabu
+          announcement: true
+
+      # Evita esperar indefinidamente si falla el sonido.
+      - wait_until:
+          condition:
+            media_player.is_announcing:
+              id: respeaker_media_player
+          timeout: 2s
+
+      - wait_until:
+          condition:
+            not:
+              media_player.is_announcing:
+                id: respeaker_media_player
+          timeout: 3s
+
+      - delay: 150ms
+
+      - if:
+          condition:
+            voice_assistant.connected:
+          then:
+            - voice_assistant.start:
+                wake_word: !lambda return palabra;
+          else:
+            - script.stop: barrido_activacion
+            - script.stop: giro_respuesta
+
+            - lambda: id(fase_visual) = 0;
+
+            - script.execute:
+                id: configurar_aro
+                efecto: 0
+                brillo: 64
+
+  # Espera al final de la interacción y vuelve a escuchar.
   - id: rearmar_palabra_activacion
     mode: restart
     then:
@@ -181,6 +408,25 @@ script:
 
       - delay: 500ms
 
+      - wait_until:
+          condition:
+            and:
+              - not:
+                  voice_assistant.is_running:
+              - not:
+                  media_player.is_announcing:
+                    id: respeaker_media_player
+
+      - script.stop: barrido_activacion
+      - script.stop: giro_respuesta
+
+      - lambda: id(fase_visual) = 0;
+
+      - script.execute:
+          id: configurar_aro
+          efecto: 0
+          brillo: 64
+
       - if:
           condition:
             and:
@@ -190,29 +436,137 @@ script:
           then:
             - micro_wake_word.start:
 
+# Detecta el comienzo de la respuesta hablada.
+# Sincroniza el interruptor virtual con el estado real del XVF3800.
+interval:
+  - interval: 100ms
+    then:
+      - if:
+          condition:
+            and:
+              - lambda: return id(fase_visual) == 3;
+              - media_player.is_announcing:
+                  id: respeaker_media_player
+          then:
+            - lambda: id(fase_visual) = 4;
+            - script.execute: giro_respuesta
+
+  - interval: 1s
+    then:
+      - lambda: |-
+          // GPO_READ_VALUES:
+          // cinco valores + un byte de estado.
+          const uint8_t solicitud[] = {
+            0x14, 0x80, 0x06
+          };
+
+          uint8_t respuesta[6] = {};
+
+          auto escritura = id(xmos_control_bus).write(
+            0x2C, solicitud, sizeof(solicitud)
+          );
+
+          if (escritura != esphome::i2c::ERROR_OK) {
+            ESP_LOGW("xmos_mute", "Error al solicitar estado GPO");
+            return;
+          }
+
+          auto lectura = id(xmos_control_bus).read(
+            0x2C, respuesta, sizeof(respuesta)
+          );
+
+          if (lectura != esphome::i2c::ERROR_OK) {
+            ESP_LOGW("xmos_mute", "Error al leer estado GPO");
+            return;
+          }
+
+          // Estado 0 = respuesta válida.
+          // Si está pendiente o falla, conserva el último estado.
+          if (respuesta[0] != 0) {
+            return;
+          }
+
+          // respuesta[1]: X0D11
+          // respuesta[2]: X0D30 -> silencio del micrófono
+          // respuesta[3]: X0D31
+          // respuesta[4]: X0D33
+          // respuesta[5]: X0D39
+          const bool silenciado = respuesta[2] != 0;
+
+          if (
+            !id(silenciar_microfono).has_state() ||
+            id(silenciar_microfono).state != silenciado
+          ) {
+            id(silenciar_microfono).publish_state(silenciado);
+
+            ESP_LOGI(
+              "xmos_mute",
+              "Microfono: %s",
+              silenciado ? "SILENCIADO" : "HABILITADO"
+            );
+          }
+
 voice_assistant:
   id: respeaker_va
   microphone: respeaker_mic
   media_player: respeaker_media_player
   micro_wake_word: respeaker_wake_word
-
-  # La detección de la palabra se hace localmente.
   use_wake_word: false
 
   on_client_connected:
     - script.execute: rearmar_palabra_activacion
 
   on_client_disconnected:
+    - script.stop: barrido_activacion
+    - script.stop: giro_respuesta
+    - script.stop: iniciar_interaccion
     - script.stop: rearmar_palabra_activacion
     - micro_wake_word.stop:
 
+    - lambda: id(fase_visual) = 0;
+
+    - script.execute:
+        id: configurar_aro
+        efecto: 0
+        brillo: 64
+
   on_start:
     - micro_wake_word.stop:
+
+  # Assist está preparado para recibir la orden.
+  on_listening:
+    - script.stop: barrido_activacion
+    - script.stop: giro_respuesta
+
+    - lambda: id(fase_visual) = 2;
+
+    - script.execute:
+        id: configurar_aro
+        efecto: 4
+        brillo: 64
+
+  # Ha terminado de detectar habla.
+  on_stt_vad_end:
+    - lambda: id(fase_visual) = 3;
+
+    - script.execute:
+        id: configurar_aro
+        efecto: 3
+        brillo: 32
 
   on_stt_end:
     - logger.log:
         format: "Assist ha reconocido: %s"
         args: ["x.c_str()"]
+
+  # Respaldo si el proveedor no envía on_stt_vad_end.
+  on_intent_start:
+    - lambda: id(fase_visual) = 3;
+
+    - script.execute:
+        id: configurar_aro
+        efecto: 3
+        brillo: 32
 
   on_end:
     - script.execute: rearmar_palabra_activacion
@@ -229,10 +583,11 @@ button:
   - platform: restart
     name: "Restart"
 
-# Se conserva la activación manual para pruebas.
-# No es un interruptor de privacidad:
-# apagarlo no deshabilita "Okay Nabu".
+# Activación manual para pruebas.
+# No es un interruptor de privacidad.
 switch:
+  # Activación manual de Assist.
+  # No es un interruptor de privacidad del micrófono.
   - platform: template
     name: "Start Voice Assistant"
     id: start_voice_assistant
@@ -240,10 +595,75 @@ switch:
     restore_mode: ALWAYS_OFF
 
     turn_on_action:
-      - script.stop: rearmar_palabra_activacion
-      - micro_wake_word.stop:
-      - voice_assistant.start:
+      - script.execute:
+          id: iniciar_interaccion
+          palabra: ""
 
     turn_off_action:
+      - script.stop: iniciar_interaccion
       - voice_assistant.stop:
       - script.execute: rearmar_palabra_activacion
+
+  # Estado real del silencio de la salida de audio.
+  - platform: template
+    name: "Silenciar altavoz"
+    id: silenciar_altavoz
+    icon: mdi:volume-off
+
+    lambda: |-
+      return id(respeaker_media_player).is_muted();
+
+    turn_on_action:
+      - media_player.mute:
+          id: respeaker_media_player
+
+    turn_off_action:
+      - media_player.unmute:
+          id: respeaker_media_player
+
+  # Silencio del micrófono controlado por el propio XVF3800.
+  # El estado se publica desde la lectura periódica I2C.
+  - platform: template
+    name: "Silenciar microfono"
+    id: silenciar_microfono
+    icon: mdi:microphone-off
+    optimistic: false
+
+    turn_on_action:
+      - lambda: |-
+          // Recurso 20, comando 1:
+          // GPIO 30 = 1 -> micrófono silenciado.
+          const uint8_t comando[] = {
+            0x14, 0x01, 0x02, 0x1E, 0x01
+          };
+
+          auto resultado = id(xmos_control_bus).write(
+            0x2C, comando, sizeof(comando)
+          );
+
+          if (resultado != esphome::i2c::ERROR_OK) {
+            ESP_LOGW(
+              "xmos_mute",
+              "Error al silenciar el microfono: %d",
+              static_cast<int>(resultado)
+            );
+          }
+
+    turn_off_action:
+      - lambda: |-
+          // GPIO 30 = 0 -> micrófono habilitado.
+          const uint8_t comando[] = {
+            0x14, 0x01, 0x02, 0x1E, 0x00
+          };
+
+          auto resultado = id(xmos_control_bus).write(
+            0x2C, comando, sizeof(comando)
+          );
+
+          if (resultado != esphome::i2c::ERROR_OK) {
+            ESP_LOGW(
+              "xmos_mute",
+              "Error al habilitar el microfono: %d",
+              static_cast<int>(resultado)
+            );
+          }
