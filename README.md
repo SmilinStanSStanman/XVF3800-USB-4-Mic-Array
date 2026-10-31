@@ -4,9 +4,19 @@ Esta es una guía paso a paso para crear un altavoz de Home Assistant Voice con 
 
 Seeed Studio XVF3800-USB-4-Mic-Array
 
+![ESQUEMA XVF3800](docs/XVF3800-USB-4-Mic-Array.png)
+
 Amplificador MAX98357A
 
-Altavoz 3W
+![ESQUEMA XVF3800](docs/MAX98357A.png)
+
+Altavoz 3W 4ohm
+
+![ESQUEMA XVF3800](docs/speaker-4ohm-3W-1.25terminal.png)
+
+Conectores JST PH 2.0mm 2pines para unir terminal del altavoz a amplificador
+
+![ESQUEMA XVF3800](docs/Conectores-JST-PH-2.0mm-2pines.png)
 
 **<ins>[ACTUALIZACION DE FIRMWARE DE XVF3800]</ins>**
 
