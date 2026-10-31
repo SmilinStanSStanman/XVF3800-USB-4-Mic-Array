@@ -2,7 +2,7 @@
 
 Esta es una guía paso a paso para crear un altavoz de Home Assistant Voice con el siguiente material:
 
-Seeed Studio XVF3800-USB-4-Mic-Array
+Seeed Studio XVF3800-USB-4-Mic-Array con ESP32-S3 integrado
 
 ![ESQUEMA XVF3800](docs/XVF3800-USB-4-Mic-Array.png)
 
